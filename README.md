@@ -2,6 +2,8 @@
 
 Planilha estruturada para registro, acompanhamento e análise da progressão de treino e nutrição. Organizada em múltiplas abas com separação clara entre dados brutos, dicionários de referência e análises.
 
+![Toguro](toguro.gif)
+
 ---
 
 ## 📁 Estrutura do Arquivo
