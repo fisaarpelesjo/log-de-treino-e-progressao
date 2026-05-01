@@ -211,8 +211,22 @@ def main():
             if chat_id != CHAT_ID or not text:
                 continue
 
-            # /gerar command — no session needed
             lower = text.strip().lower()
+
+            if lower in ("/help", "help"):
+                send(
+                    "<b>IronForge — Comandos</b>\n\n"
+                    "/gerar A|B|C — gera treino e registra no ODS\n"
+                    "/status — exercicio atual e progresso\n"
+                    "/undo — desfaz último registro\n"
+                    "/help — esta mensagem\n\n"
+                    "<b>Registrar peso:</b>\n"
+                    "<code>80</code> — só carga\n"
+                    "<code>80 8</code> — carga + RPE"
+                )
+                continue
+
+            # /gerar command — no session needed
             if lower.startswith("/gerar"):
                 parts = text.strip().split()
                 treino_arg = parts[1] if len(parts) > 1 else ""
