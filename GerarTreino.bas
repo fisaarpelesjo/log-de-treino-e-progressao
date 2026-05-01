@@ -202,11 +202,11 @@ Sub EnviarTelegram(ByVal sBotToken As String, ByVal sChatId As String, ByVal sMs
     Print #iFile, sMsg
     Close #iFile
 
-    Dim sPS As String
-    sPS = "$msg = (Get-Content '" & sTempFile & "' -Raw -Encoding UTF8).Trim();" & _
-          "Invoke-RestMethod -Uri 'https://api.telegram.org/bot" & sBotToken & "/sendMessage'" & _
-          " -Method Post -Body @{chat_id='" & sChatId & "';text=$msg} | Out-Null;" & _
-          "Remove-Item '" & sTempFile & "'"
+    Dim sUrl As String
+    sUrl = "https://api.telegram.org/bot" & sBotToken & "/sendMessage"
 
-    Shell "powershell.exe", 0, "-WindowStyle Hidden -NonInteractive -Command " & Chr(34) & sPS & Chr(34), False
+    Dim sCmd As String
+    sCmd = "/c curl -s -X POST """ & sUrl & """ --data-urlencode ""text@" & sTempFile & """ -d ""chat_id=" & sChatId & """ && del """ & sTempFile & """"
+
+    Shell "cmd.exe", 0, sCmd, False
 End Sub
