@@ -126,6 +126,45 @@ Sub GerarTreino()
 
     oABRange.ConditionalFormat = oABCF
 
+    ' Write session.json for Telegram bot and reset pending log
+    Dim sDocDir As String
+    sDocDir = GetDocDir()
+
+    Dim sPendingFile As String
+    sPendingFile = sDocDir & "pending_log.csv"
+    If Dir(sPendingFile) <> "" Then Kill sPendingFile
+
+    Dim sSessionFile As String
+    sSessionFile = sDocDir & "session.json"
+    Dim sq As String
+    sq = Chr(34)
+    Dim iSF As Integer
+    iSF = FreeFile()
+    Open sSessionFile For Output As #iSF
+    Print #iSF, "{"
+    Print #iSF, "  " & sq & "date" & sq & ": " & sq & Format(Now(), "YYYY-MM-DD") & sq & ","
+    Print #iSF, "  " & sq & "treino" & sq & ": " & sq & treino & sq & ","
+    Print #iSF, "  " & sq & "exercises" & sq & ": ["
+    Dim k As Integer
+    For k = startEx To endEx
+        Dim sExN As String
+        Dim nExS As Integer
+        Dim nExR As Integer
+        Dim nExRow As Long
+        sExN = oExercicios.getCellByPosition(0, k).getString()
+        nExS = CInt(oExercicios.getCellByPosition(1, k).getValue())
+        nExR = CInt(oExercicios.getCellByPosition(2, k).getValue())
+        nExRow = lastRow + 1 + (k - startEx)
+        sExN = Join(Split(sExN, "\"), "\\")
+        sExN = Join(Split(sExN, sq), "\" & sq)
+        Dim sComma As String
+        If k < endEx Then sComma = "," Else sComma = ""
+        Print #iSF, "    {" & sq & "row" & sq & ": " & nExRow & ", " & sq & "name" & sq & ": " & sq & sExN & sq & ", " & sq & "sets" & sq & ": " & nExS & ", " & sq & "reps" & sq & ": " & nExR & "}" & sComma
+    Next k
+    Print #iSF, "  ]"
+    Print #iSF, "}"
+    Close #iSF
+
     MsgBox "Treino " & treino & " gerado! " & (endEx - startEx + 1) & _
            " exercicios adicionados a partir da linha " & (lastRow + 2) & ".", _
            64, "Treino Gerado"
@@ -161,20 +200,67 @@ Sub GerarTreino()
     oDoc.getCurrentController().select(oRange)
 End Sub
 
-Function LerTokenTelegram() As String
-    Dim sDocURL As String
-    Dim sDir As String
-    Dim sEnvPath As String
+Sub SincronizarTreino()
+    Dim oDoc As Object
+    Dim oTreinos As Object
+    oDoc = ThisComponent
+    oTreinos = oDoc.Sheets.getByName("TREINOS")
 
-    sDocURL = ThisComponent.getURL()
-    Dim nPos As Integer
-    Dim nLast As Integer
-    nLast = 0
-    For nPos = 1 To Len(sDocURL)
-        If Mid(sDocURL, nPos, 1) = "/" Then nLast = nPos
-    Next nPos
-    sDir = Left(sDocURL, nLast)
-    sEnvPath = ConvertFromURL(sDir & ".env")
+    Dim sPendingFile As String
+    sPendingFile = GetDocDir() & "pending_log.csv"
+
+    If Dir(sPendingFile) = "" Then
+        MsgBox "Nenhum dado pendente.", 64, "Sincronizar"
+        Exit Sub
+    End If
+
+    Dim iFile As Integer
+    Dim sLine As String
+    Dim nCount As Integer
+    Dim parts() As String
+    Dim nRow As Long
+    Dim dCarga As Double
+    nCount = 0
+
+    iFile = FreeFile()
+    Open sPendingFile For Input As #iFile
+    Do While Not EOF(iFile)
+        Line Input #iFile, sLine
+        sLine = Trim(sLine)
+        If sLine <> "" Then
+            parts = Split(sLine, ",")
+            If UBound(parts) >= 1 Then
+                nRow = CLng(Trim(parts(0)))
+                dCarga = CDbl(Trim(parts(1)))
+                oTreinos.getCellByPosition(6, nRow).setValue(dCarga)
+                If UBound(parts) >= 2 And Trim(parts(2)) <> "" Then
+                    oTreinos.getCellByPosition(7, nRow).setValue(CInt(Trim(parts(2))))
+                End If
+                nCount = nCount + 1
+            End If
+        End If
+    Loop
+    Close #iFile
+
+    Kill sPendingFile
+    MsgBox nCount & " exercicios sincronizados!", 64, "Sincronizar"
+End Sub
+
+Function GetDocDir() As String
+    Dim sURL As String
+    sURL = ThisComponent.getURL()
+    Dim n As Integer
+    Dim nL As Integer
+    nL = 0
+    For n = 1 To Len(sURL)
+        If Mid(sURL, n, 1) = "/" Then nL = n
+    Next n
+    GetDocDir = ConvertFromURL(Left(sURL, nL))
+End Function
+
+Function LerTokenTelegram() As String
+    Dim sEnvPath As String
+    sEnvPath = GetDocDir() & ".env"
 
     Dim iFile As Integer
     Dim sLine As String

@@ -1,0 +1,179 @@
+import requests
+import json
+import time
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
+SESSION_FILE = BASE_DIR / "session.json"
+PENDING_FILE = BASE_DIR / "pending_log.csv"
+CHAT_ID = "6575275306"
+
+
+def read_token():
+    env_file = BASE_DIR / ".env"
+    if not env_file.exists():
+        return None
+    with open(env_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if "=" in line and line.split("=", 1)[0].upper() == "TELEGRAM_TOKEN":
+                return line.split("=", 1)[1]
+    return None
+
+
+TOKEN = read_token()
+API = f"https://api.telegram.org/bot{TOKEN}"
+
+
+def send(text):
+    try:
+        requests.post(
+            f"{API}/sendMessage",
+            json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"Send error: {e}")
+
+
+def load_session():
+    if not SESSION_FILE.exists():
+        return None
+    with open(SESSION_FILE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_pending():
+    if not PENDING_FILE.exists():
+        return []
+    entries = []
+    with open(PENDING_FILE, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            entry = {"row": int(parts[0]), "carga": float(parts[1])}
+            if len(parts) > 2 and parts[2]:
+                entry["rpe"] = int(parts[2])
+            entries.append(entry)
+    return entries
+
+
+def save_pending(entries):
+    with open(PENDING_FILE, "w", encoding="utf-8") as f:
+        for e in entries:
+            rpe_str = str(e.get("rpe", ""))
+            f.write(f"{e['row']},{e['carga']},{rpe_str}\n")
+
+
+def get_updates(offset=0):
+    try:
+        r = requests.get(
+            f"{API}/getUpdates",
+            params={"offset": offset, "timeout": 3},
+            timeout=10,
+        )
+        return r.json().get("result", [])
+    except Exception:
+        return []
+
+
+def handle(text, session, pending):
+    text = text.strip()
+    exercises = session["exercises"]
+    treino = session["treino"]
+    filled = len(pending)
+    total = len(exercises)
+
+    if text.lower() in ("/status", "status"):
+        if filled >= total:
+            send(f"Treino {treino} completo! {total}/{total} ✓\nAbra o LibreOffice e clique <b>Sincronizar</b>.")
+        else:
+            ex = exercises[filled]
+            done = "\n".join(f"✓ {exercises[i]['name']}" for i in range(filled))
+            msg = f"Treino {treino} — {filled}/{total}\n"
+            if done:
+                msg += done + "\n"
+            msg += f"▶ <b>{ex['name']}</b> ({ex['sets']}x{ex['reps']})"
+            send(msg)
+        return
+
+    if text.lower() in ("/undo", "undo"):
+        if not pending:
+            send("Nada para desfazer.")
+            return
+        removed = pending.pop()
+        ex_name = next((e["name"] for e in exercises if e["row"] == removed["row"]), "?")
+        save_pending(pending)
+        send(f"↩ Desfeito: <b>{ex_name}</b>")
+        return
+
+    if filled >= total:
+        send(f"Treino {treino} já completo! Use /status.")
+        return
+
+    parts = text.replace(",", ".").split()
+    try:
+        carga = float(parts[0])
+        rpe = int(parts[1]) if len(parts) > 1 else None
+    except (ValueError, IndexError):
+        send("Formato: <code>80 8</code> (carga + RPE) ou <code>80</code> (só carga)")
+        return
+
+    ex = exercises[filled]
+    entry = {"row": ex["row"], "carga": carga}
+    if rpe is not None:
+        entry["rpe"] = rpe
+    pending.append(entry)
+    save_pending(pending)
+
+    rpe_str = f" RPE {rpe}" if rpe is not None else ""
+    new_filled = len(pending)
+
+    if new_filled >= total:
+        send(
+            f"<b>{ex['name']}</b> ✓ {carga}kg{rpe_str} ({new_filled}/{total})\n\n"
+            f"Treino completo! Abra o LibreOffice e clique <b>Sincronizar</b>."
+        )
+    else:
+        nxt = exercises[new_filled]
+        send(
+            f"<b>{ex['name']}</b> ✓ {carga}kg{rpe_str} ({new_filled}/{total})\n"
+            f"▶ {nxt['name']} ({nxt['sets']}x{nxt['reps']})"
+        )
+
+
+def main():
+    if not TOKEN:
+        print("TELEGRAM_TOKEN not found in .env")
+        return
+
+    offset = 0
+    print("IronForge bot polling... (Ctrl+C to stop)")
+
+    while True:
+        updates = get_updates(offset)
+        for update in updates:
+            offset = update["update_id"] + 1
+            msg = update.get("message", {})
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            text = msg.get("text", "")
+
+            if chat_id != CHAT_ID or not text:
+                continue
+
+            session = load_session()
+            pending = load_pending()
+
+            if session is None:
+                send("Nenhuma sessão ativa. Gere o treino primeiro no LibreOffice.")
+                continue
+
+            handle(text, session, pending)
+
+        time.sleep(3)
+
+
+if __name__ == "__main__":
+    main()
