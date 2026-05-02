@@ -2,7 +2,66 @@
 
 ## Projeto
 
-Log de treino e nutrição em LibreOffice Calc (ODS). Arquivo principal: `log-de-treino-e-progressao.ods`.
+Log de treino em LibreOffice Calc (ODS) com bot Telegram para registro de pesos durante o treino. Arquivo principal: `log-de-treino-e-progressao.ods`.
+
+## Arquivos Python
+
+### `ods_ops.py`
+Módulo de manipulação direta do ODS via XML (zipfile + regex). Funções principais:
+
+- `gerar_treino(treino_type)` — insere linhas na aba TREINOS, retorna lista de `{row, name, sets, reps}`
+- `update_row_weights(row_0idx, carga, rpe)` — atualiza colunas G/H de uma linha existente
+- `read_exercises()` — lê todos os exercícios da aba EXERCICIOS
+- `read_previous_weights()` — retorna `{nome_exercicio: última_carga}` do histórico TREINOS
+- `write_session(treino_type, exercises)` / `clear_pending()` — gerencia `session.json` / `pending_log.csv`
+- `is_ods_locked()` — verifica se ODS está aberto no LibreOffice (arquivo `.~lock.*#`)
+
+**Índices de exercícios (0-indexed):**
+```python
+TREINO_RANGES = {
+    "A": range(0, 8),
+    "B": range(8, 15),
+    "C": range(15, 18),
+}
+```
+
+**Numeração de linhas:**
+- `r = n_data + 2 + idx` — número 1-based da linha no spreadsheet
+- `row_0idx = r - 1` — índice 0-based para `getCellByPosition`
+
+**Sintaxe de fórmulas ODS (content.xml):**
+- Prefixo `of:` obrigatório: `table:formula="of:=IF(...)"`
+- Referências: `[.A1]`, `[.$D$2]`, `[$EXERCICIOS.A:.A]`
+- Separador de argumentos: ponto e vírgula (locale pt-BR)
+
+**Estilos de célula confirmados (content.xml):**
+- `ce2` = data, `ce9` = semana (fórmula), `ce71` = tipo treino, `ce16` = nome exercício
+- `ce20` = células com fórmula, `ce22` = carga/RPE, `ce65` = trailing (repeat 16371)
+
+### `telegram_poller.py`
+Bot Telegram que permite controle total do treino pelo celular, sem abrir o PC.
+
+**Comandos:**
+- `/gerar A|B|C` — gera treino no ODS, envia tabela com exercícios e pesos anteriores
+- `80` ou `80 8` — registra carga (e RPE) do próximo exercício pendente
+- `/status` — mostra progresso da sessão atual
+- `/undo` — desfaz último registro
+- `/help` — lista comandos
+
+**Fluxo de dados:**
+1. `/gerar A` → `ods_ops.gerar_treino()` → grava `session.json`, apaga `pending_log.csv`
+2. `80 8` → sempre salva em `pending_log.csv` + tenta gravar direto no ODS (se não estiver bloqueado)
+3. Se ODS estiver aberto, usar botão **Sincronizar** no LibreOffice para aplicar o `pending_log.csv`
+
+**Arquivos de estado (no .gitignore):**
+- `session.json` — sessão ativa: treino, data, lista de exercícios com row index
+- `pending_log.csv` — pesos pendentes: `row,carga,rpe` por linha
+- `.env` — `TELEGRAM_TOKEN=...`
+
+**Executar:**
+```bash
+python telegram_poller.py
+```
 
 ## Arquivo ODS
 
@@ -16,23 +75,26 @@ with zipfile.ZipFile("log-de-treino-e-progressao.ods") as z:
 
 ## Macro LibreOffice Basic
 
-O macro `GerarTreino` está embutido no ODS em `Basic/Standard/Module1`. O backup do código está em `GerarTreino.bas`.
+O macro `GerarTreino` está embutido no ODS em `Basic/Standard/Module1`. Backup em `GerarTreino.bas`.
 
 **O que o macro faz:**
 - Pergunta ao usuário "A", "B" ou "C"
 - Detecta a última linha usada em TREINOS
-- Insere uma linha por exercício (8 para Treino A, 7 para Treino B, 3 para Treino C)
-- Preenche: Data, Semana (fórmula), Treino, Exercício (lido de EXERCICIOS), Séries, Reps
+- Insere uma linha por exercício (8 para A, 7 para B, 3 para C)
+- Preenche: Data, Semana (fórmula), Treino, Exercício, Séries, Reps
 - Insere fórmulas para: Volume, Decisão, Carga_anterior, Próxima_carga
-- Recria o formato condicional de cores para toda a faixa D2:M{lastRow} e A2:B{lastRow}
+- Recria formato condicional para faixa D2:M{lastRow} e A2:B{lastRow}
+- Grava `session.json` e apaga `pending_log.csv`
+- Envia tabela Telegram com exercícios e pesos sugeridos
 
 **Detalhes técnicos do macro:**
-- `setFormula()` usa ponto e vírgula como separador de argumentos (locale pt-BR)
-- Fórmulas de Séries/Reps são valores diretos (não fórmulas), lidos da aba EXERCICIOS
-- Formato condicional recriado via `XSheetConditionalFormat.addNew()` com `ConditionOperator.FORMULA`
-- Referência de linha nas fórmulas do CF usa offset a partir da linha 0 (header): `$J1` = "mesma linha coluna J"
+- `setFormula()` usa ponto e vírgula como separador (locale pt-BR)
+- `GetDocDir()` — helper que extrai diretório do ODS via loop manual (LibreOffice Basic não tem `InStrRev`)
+- `LerTokenTelegram()` — lê `TELEGRAM_TOKEN=valor` do `.env`
+- `EnviarTelegram()` — usa VBScript via `wscript.exe` com `MSXML2.ServerXMLHTTP.6.0`
+- `SincronizarTreino()` — lê `pending_log.csv` e preenche colunas G/H
 
-**Estilos de cor (definidos em styles.xml do ODS):**
+**Estilos de cor (styles.xml do ODS):**
 - `ConditionalStyle_1` — cinza `#cccccc` + negrito (separador de sessão em A:B)
 - `ConditionalStyle_2` — verde `#d9ead3` (AUMENTAR)
 - `ConditionalStyle_3` — vermelho `#f4cccc` (REDUZIR)
@@ -41,25 +103,19 @@ O macro `GerarTreino` está embutido no ODS em `Basic/Standard/Module1`. O backu
 ## Estrutura da Aba EXERCICIOS
 
 Sem cabeçalho. Linhas 1–8 = Treino A, linhas 9–15 = Treino B, linhas 16–18 = Treino C.
-Colunas: A=Exercicio, B=Series, C=Reps (todas 1-indexed no spreadsheet, 0-indexed na API Basic).
-
-Índices 0-indexed usados pelo macro:
-- Treino A: 0–7
-- Treino B: 8–14
-- Treino C: 15–17
+Colunas: A=Exercicio, B=Series, C=Reps (1-indexed no spreadsheet, 0-indexed na API Basic/Python).
 
 ## Regenerar o ODS a partir do XLSX
 
-Se precisar recriar o ODS do zero (ex: dados novos no xlsx):
 ```bash
 python add_macro_treino.py
 ```
-O script converte xlsx → ods via LibreOffice headless, injeta o macro Basic e o botão, e expande os ranges de formato condicional para M10000.
+Converte xlsx → ods via LibreOffice headless, injeta o macro Basic e o botão.
 
 LibreOffice em: `C:\Program Files\LibreOffice\program\soffice.exe`
 
 ## Dependências Python
 
+- `requests` — chamadas Telegram API
 - `openpyxl` — leitura do xlsx
-- `pywin32` — automação Excel/COM (não usado atualmente)
-- Biblioteca padrão: `zipfile`, `subprocess`, `xml.etree.ElementTree`
+- Biblioteca padrão: `zipfile`, `re`, `shutil`, `json`, `datetime`, `pathlib`
